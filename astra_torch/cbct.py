@@ -98,7 +98,7 @@ def fdk_reconstruction_masked(
     # if vecs is a torch tensor, convert to numpy
     if isinstance(vecs, torch.Tensor):
         vecs = vecs.detach().cpu().numpy()
-        
+
     if mask is not None:
         # Support torch.Tensor or numpy / sequence masks (boolean or index)
         if isinstance(mask, torch.Tensor):
@@ -238,6 +238,9 @@ def gd_reconstruction_masked(
 
     if device is None:
         device = projs_vrc.device if isinstance(projs_vrc, torch.Tensor) else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    if isinstance(vecs, torch.Tensor):
+        vecs = vecs.detach().cpu().numpy()
 
     # Select masked subset of projections & geometry (reuse logic from FDK function)
     if mask is not None:
