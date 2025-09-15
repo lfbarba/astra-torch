@@ -1,0 +1,223 @@
+Metadata-Version: 2.4
+Name: astra-torch
+Version: 0.1.0
+Summary: GPU-accelerated tomographic reconstruction library with PyTorch integration
+Home-page: https://github.com/chip-project/astra-torch
+Author: CHIP Project
+Author-email: CHIP Project <chip@example.com>
+License: MIT License
+        
+        Copyright (c) 2024 CHIP Project
+        
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files (the "Software"), to deal
+        in the Software without restriction, including without limitation the rights
+        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        copies of the Software, and to permit persons to whom the Software is
+        furnished to do so, subject to the following conditions:
+        
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software.
+        
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        SOFTWARE.
+        
+Project-URL: Homepage, https://github.com/chip-project/astra-torch
+Project-URL: Documentation, https://astra-torch.readthedocs.io/
+Project-URL: Repository, https://github.com/chip-project/astra-torch.git
+Project-URL: Bug Tracker, https://github.com/chip-project/astra-torch/issues
+Keywords: tomography,reconstruction,pytorch,astra,cbct,laminography
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Science/Research
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Topic :: Scientific/Engineering :: Image Processing
+Classifier: Topic :: Scientific/Engineering :: Medical Science Apps.
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: torch>=1.9.0
+Requires-Dist: numpy>=1.21.0
+Requires-Dist: tqdm>=4.60.0
+Requires-Dist: astra-toolbox>=2.0.0
+Requires-Dist: h5py>=3.0.0
+Requires-Dist: scipy>=1.7.0
+Provides-Extra: dev
+Requires-Dist: pytest>=6.0; extra == "dev"
+Requires-Dist: black>=21.0; extra == "dev"
+Requires-Dist: flake8>=3.9; extra == "dev"
+Requires-Dist: mypy>=0.910; extra == "dev"
+Requires-Dist: pytest-cov>=2.12.0; extra == "dev"
+Provides-Extra: notebooks
+Requires-Dist: jupyter>=1.0.0; extra == "notebooks"
+Requires-Dist: matplotlib>=3.3.0; extra == "notebooks"
+Requires-Dist: ipywidgets>=7.6.0; extra == "notebooks"
+Dynamic: author
+Dynamic: home-page
+Dynamic: license-file
+Dynamic: requires-python
+
+# ASTRA-Torch
+
+GPU-accelerated tomographic reconstruction library with PyTorch integration.
+
+ASTRA-Torch provides PyTorch-compatible implementations of tomographic reconstruction algorithms using the ASTRA toolbox, with support for both cone-beam CT (CBCT) and laminography.
+
+## Features
+
+- **CBCT Reconstruction**: FDK and gradient descent algorithms for cone-beam CT
+- **Laminography Reconstruction**: FBP and gradient descent algorithms for parallel-beam laminography  
+- **PyTorch Integration**: Differentiable operators with autograd support
+- **GPU Acceleration**: CUDA-accelerated reconstruction via ASTRA toolbox
+- **Flexible Data Loading**: Built-in support for Walnut dataset format
+- **Optimization-Based Methods**: Gradient descent reconstruction with customizable loss functions
+
+## Installation
+
+### Prerequisites
+
+- Python 3.8+
+- CUDA-compatible GPU (recommended)
+- ASTRA Toolbox compiled with CUDA support
+
+### Install from PyPI (when available)
+
+```bash
+pip install astra-torch
+```
+
+### Install from source
+
+```bash
+git clone https://github.com/chip-project/astra-torch.git
+cd astra-torch
+pip install -e .
+```
+
+### Development installation
+
+```bash
+git clone https://github.com/chip-project/astra-torch.git
+cd astra-torch
+pip install -e ".[dev,notebooks]"
+```
+
+## Quick Start
+
+### CBCT Reconstruction
+
+```python
+import astra_torch
+import torch
+
+# Load Walnut dataset
+projs, vecs, meta = astra_torch.load_walnut_projections(
+    '/path/to/walnut/data', 
+    walnut_id=1,
+    orbit_id=2
+)
+
+# FDK reconstruction
+volume_fdk = astra_torch.fdk_reconstruction_masked(
+    projs, vecs, 
+    voxel_per_mm=10
+)
+
+# Gradient descent reconstruction (sparse views)
+mask = torch.arange(0, len(vecs), 4)  # Every 4th view
+volume_gd = astra_torch.gd_reconstruction_masked(
+    projs, vecs,
+    mask=mask,
+    max_epochs=30,
+    lr=1e-3
+)
+```
+
+### Laminography Reconstruction
+
+```python
+from astra_torch import build_lamino_projector, lamino_fbp_reconstruction_masked
+
+# Build laminography projector  
+projector = build_lamino_projector(
+    vol_shape=(256, 512, 512),
+    det_shape=(501, 501), 
+    angles_deg=np.linspace(0, 360, 360),
+    lamino_angle_deg=61.0
+)
+
+# Forward projection
+projections = projector(volume_tensor)
+
+# FBP reconstruction
+reconstructed = lamino_fbp_reconstruction_masked(
+    projections,
+    angles_deg=np.linspace(0, 360, 360),
+    lamino_angle_deg=61.0
+)
+```
+
+## Documentation
+
+### CBCT Functions
+
+- `load_walnut_projections()`: Load Walnut dataset projections
+- `fdk_reconstruction_masked()`: FDK reconstruction with view masking
+- `gd_reconstruction_masked()`: Gradient descent reconstruction  
+- `build_conebeam_projector()`: Create differentiable cone-beam projector
+
+### Laminography Functions
+
+- `lamino_fbp_reconstruction_masked()`: FBP reconstruction for laminography
+- `lamino_gd_reconstruction_masked()`: Gradient descent laminography reconstruction
+- `build_lamino_projector()`: Create differentiable laminography projector
+
+## Requirements
+
+- `torch>=1.9.0`
+- `numpy>=1.21.0`
+- `astra-toolbox>=2.0.0`
+- `tqdm>=4.60.0`
+- `h5py>=3.0.0`
+- `scipy>=1.7.0`
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature-name`
+3. Make your changes and add tests
+4. Run tests: `pytest`
+5. Format code: `black astra_torch/`
+6. Submit a pull request
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Citation
+
+If you use ASTRA-Torch in your research, please cite:
+
+```bibtex
+@software{astra_torch,
+  title={ASTRA-Torch: GPU-accelerated tomographic reconstruction with PyTorch},
+  author={CHIP Project},
+  year={2024},
+  url={https://github.com/chip-project/astra-torch}
+}
+```
+
+## Acknowledgments
+
+- Built on top of the excellent [ASTRA Toolbox](https://www.astra-toolbox.com/)
+- Inspired by the PyTorch ecosystem for differentiable programming
