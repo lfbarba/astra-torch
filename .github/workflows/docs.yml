@@ -9,20 +9,17 @@ on:
 jobs:
   docs:
     runs-on: ubuntu-latest
+    container:
+      image: lfbarba/sdsc_image:1.0.0
     
     steps:
     - uses: actions/checkout@v4
     
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.10"
-    
-    - name: Install dependencies
+    - name: Install package and documentation dependencies
       run: |
-        python -m pip install --upgrade pip
         pip install -e ".[dev]"
-        pip install sphinx sphinx-rtd-theme myst-parser
+        pip install sphinx sphinx-rtd-theme myst-parser || echo "Installing docs dependencies manually..."
+        pip install sphinx==4.5.0 sphinx-rtd-theme==1.2.0 myst-parser==0.18.0
     
     - name: Build documentation
       run: |
