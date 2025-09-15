@@ -1,0 +1,93 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.8", "3.9", "3.10", "3.11"]
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install system dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+    
+    - name: Lint with flake8
+      run: |
+        flake8 astra_torch tests --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 astra_torch tests --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
+    
+    - name: Type check with mypy
+      run: |
+        mypy astra_torch --ignore-missing-imports
+    
+    - name: Test with pytest
+      run: |
+        pytest tests/ --cov=astra_torch --cov-report=xml --cov-report=term-missing
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        files: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+
+  test-gpu:
+    runs-on: ubuntu-latest
+    container:
+      image: nvidia/cuda:11.8-devel-ubuntu20.04
+      options: --gpus all
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install system dependencies
+      run: |
+        apt-get update
+        apt-get install -y python3 python3-pip python3-dev build-essential
+        ln -s /usr/bin/python3 /usr/bin/python
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+        pip install -e ".[dev]"
+    
+    - name: Test GPU functionality
+      run: |
+        python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
+        pytest tests/ -m "gpu" --cov=astra_torch
+      env:
+        CUDA_VISIBLE_DEVICES: 0
