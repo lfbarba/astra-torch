@@ -76,8 +76,8 @@ print(f"ASTRA-Torch version: {astra_torch.__version__}")
 A Docker image with all dependencies is also available:
 
 ```bash
-docker pull ghcr.io/chip-project/astra-torch:latest
-docker run --gpus all -it ghcr.io/chip-project/astra-torch:latest
+docker pull lfbarba/sdsc_image:1.0.0
+docker run --gpus all -it lfbarba/sdsc_image:1.0.0
 ```
 
 ## Troubleshooting
