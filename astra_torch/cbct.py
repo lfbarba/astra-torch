@@ -272,9 +272,6 @@ def gd_reconstruction_masked(
     V_sel = sel_vecs.shape[0]
     det_rows, det_cols = sel_projs.shape[1], sel_projs.shape[2]
 
-    if vol_shape is None:
-        dim = int(50 * voxel_per_mm + 1)
-        vol_shape = (dim, dim, dim)
     voxel_size_mm = 1.0 / voxel_per_mm
 
     # Initialization
@@ -295,6 +292,8 @@ def gd_reconstruction_masked(
         recon = vol0.clone().to(device)
     else:
         # Default: zero initialization
+        if vol_shape is None:
+            raise ValueError("vol_shape must be provided if vol_init is None")
         recon = torch.zeros(vol_shape, dtype=torch.float32, device=device)
 
     recon = recon.unsqueeze(0).unsqueeze(0)  # (1,1,nx,ny,nz)

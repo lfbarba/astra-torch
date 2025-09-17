@@ -337,6 +337,8 @@ def gd_reconstruction_masked(
     vol_init: Optional[torch.Tensor] = None,
     # Control verbosity
     verbose: bool = False,
+    # Restart optimizer
+    restart_optimizer: bool = True, # Restart optimizer for each segment
 ) -> torch.Tensor:
     """Gradient-descent laminography reconstruction using differentiable projector.
 
@@ -385,6 +387,8 @@ def gd_reconstruction_masked(
         Initial volume (if None, uses zero initialization)
     verbose : bool
         Show progress bars
+    restart_optimizer : bool
+        If True, restart optimizer for each segment (useful for staged learning rates)
 
     Returns
     -------
@@ -486,15 +490,17 @@ def gd_reconstruction_masked(
 
     if verbose:
         print(lr_list, epochs_list)
+    optimizer = None
 
     for seg_idx, (lr_i, seg_epochs, batch_size) in enumerate(zip(lr_list, epochs_list, batch_list)):
         # Create optimizer
-        if optimizer_type.lower() == "adam":
-            optimizer = torch.optim.Adam([recon], lr=lr_i, weight_decay=weight_decay)
-        elif optimizer_type.lower() == "sgd":
-            optimizer = torch.optim.SGD([recon], lr=lr_i, momentum=momentum, weight_decay=weight_decay)
-        else:
-            raise ValueError(f"Unsupported optimizer type: {optimizer_type}. Supported: 'adam', 'sgd'")
+        if optimizer is None or restart_optimizer:
+            if optimizer_type.lower() == "adam":
+                optimizer = torch.optim.Adam([recon], lr=lr_i, weight_decay=weight_decay)
+            elif optimizer_type.lower() == "sgd":
+                optimizer = torch.optim.SGD([recon], lr=lr_i, momentum=momentum, weight_decay=weight_decay)
+            else:
+                raise ValueError(f"Unsupported optimizer type: {optimizer_type}. Supported: 'adam', 'sgd'")
         
         for local_epoch in range(seg_epochs):
             perm = torch.randperm(V_sel, device=device)
