@@ -326,7 +326,7 @@ def gd_reconstruction_masked(
     device: Optional[torch.device] = None,
     # Optimization hyper-parameters
     max_epochs: int | Sequence[int] = 30,
-    batch_size: int = 10,
+    batch_size: int | Sequence[int] = 20,
     lr: float | Sequence[float] = 1e-3,
     clamp_min: float = 0.0,
     # Optimizer settings
@@ -369,7 +369,7 @@ def gd_reconstruction_masked(
         Target device for reconstruction
     max_epochs : int or Sequence[int]
         Number of optimization epochs (can be staged)
-    batch_size : int
+    batch_size : int or Sequence[int]
         Number of views per mini-batch
     lr : float or Sequence[float]
         Learning rate(s) for optimizer
@@ -455,6 +455,13 @@ def gd_reconstruction_masked(
     meas_full = sel_projs.to(device).unsqueeze(0)
 
     # Build learning rate / epoch schedule
+    if isinstance(batch_size, int):
+        batch_list = [int(batch_size)]
+    else:
+        batch_list = [int(b) for b in batch_size]
+        if len(batch_list) == 0:
+            raise ValueError("batch_size sequence must be non-empty")
+        
     if isinstance(max_epochs, int):
         epochs_list = [int(max_epochs)]
     else:
@@ -480,7 +487,7 @@ def gd_reconstruction_masked(
     if verbose:
         print(lr_list, epochs_list)
 
-    for seg_idx, (lr_i, seg_epochs) in enumerate(zip(lr_list, epochs_list)):
+    for seg_idx, (lr_i, seg_epochs, batch_size) in enumerate(zip(lr_list, epochs_list, batch_list)):
         # Create optimizer
         if optimizer_type.lower() == "adam":
             optimizer = torch.optim.Adam([recon], lr=lr_i, weight_decay=weight_decay)
