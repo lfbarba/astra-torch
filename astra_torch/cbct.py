@@ -73,6 +73,7 @@ def fdk_reconstruction_masked(
     vecs: np.ndarray,
     mask: Optional[Sequence[Any]] = None,
     voxel_per_mm: int = 10,
+    voxel_size_mm: Optional[float] = None,
     vol_shape: Optional[Tuple[int, int, int]] = None,
     short_scan: bool = False,
     device: Optional[torch.device] = None,
@@ -135,7 +136,8 @@ def fdk_reconstruction_masked(
     if vol_shape is None:
         dim = int(50 * voxel_per_mm + 1)
         vol_shape = (dim, dim, dim)
-    voxel_size_mm = 1.0 / voxel_per_mm
+    if voxel_size_mm is None:
+        voxel_size_mm = 1.0 / voxel_per_mm
 
     vol_rec = np.zeros(vol_shape, dtype=np.float32)
 
@@ -164,6 +166,7 @@ def gd_reconstruction_masked(
     vecs: np.ndarray,
     mask: Optional[Sequence[Any]] = None,
     voxel_per_mm: int = 10,
+    voxel_size_mm: Optional[float] = None,
     vol_shape: Optional[Tuple[int, int, int]] = None,
     device: Optional[torch.device] = None,
     # Optimization hyper-parameters
@@ -271,8 +274,9 @@ def gd_reconstruction_masked(
 
     V_sel = sel_vecs.shape[0]
     det_rows, det_cols = sel_projs.shape[1], sel_projs.shape[2]
-
-    voxel_size_mm = 1.0 / voxel_per_mm
+    
+    if voxel_size_mm is None:
+        voxel_size_mm = 1.0 / voxel_per_mm
 
     # Initialization
     if vol_init is not None:
