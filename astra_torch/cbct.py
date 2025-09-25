@@ -71,9 +71,9 @@ def _make_volume_geom(vol_shape: Tuple[int, int, int], voxel_size_mm: float):
 def fdk_reconstruction_masked(
     projs_vrc: torch.Tensor,
     vecs: np.ndarray,
+    voxel_per_mm: int,
+    voxel_size_mm: float,
     mask: Optional[Sequence[Any]] = None,
-    voxel_per_mm: int = 10,
-    voxel_size_mm: Optional[float] = None,
     vol_shape: Optional[Tuple[int, int, int]] = None,
     short_scan: bool = False,
     device: Optional[torch.device] = None,
@@ -164,9 +164,9 @@ def fdk_reconstruction_masked(
 def gd_reconstruction_masked(
     projs_vrc: torch.Tensor,
     vecs: np.ndarray,
+    voxel_per_mm: int,
+    voxel_size_mm: float,
     mask: Optional[Sequence[Any]] = None,
-    voxel_per_mm: int = 10,
-    voxel_size_mm: Optional[float] = None,
     vol_shape: Optional[Tuple[int, int, int]] = None,
     device: Optional[torch.device] = None,
     # Optimization hyper-parameters
