@@ -268,10 +268,16 @@ def fbp_reconstruction_masked(
         sel_angles = angles_deg
         sel_projs = projs_vrc
 
-    # Ensure CPU numpy for ASTRA (ASTRA works with numpy arrays)
-    sel_projs_np = sel_projs.detach().cpu().numpy()  # (V,R,C)
-    # Convert to ASTRA (R,V,C)
-    sino_rvc = np.transpose(sel_projs_np, (1, 0, 2)).copy()
+    # Convert to ASTRA format (R,V,C) - PyTorch CUDA tensors work directly with ASTRA!
+    # PyTorch CUDA tensors have __cuda_array_interface__, so ASTRA can access GPU memory directly
+    if sel_projs.is_cuda:
+        # Keep on GPU - ASTRA will access directly via __cuda_array_interface__
+        sino_rvc = sel_projs.permute(1, 0, 2).contiguous().detach()  # (V,R,C) -> (R,V,C)
+    else:
+        # CPU path - convert to numpy
+        sel_projs_np = sel_projs.detach().cpu().numpy()  # (V,R,C)
+        sino_rvc = np.transpose(sel_projs_np, (1, 0, 2)).copy()
+    
     det_rows, n_views, det_cols = sino_rvc.shape
 
     if vol_shape is None:
