@@ -12,40 +12,6 @@ import matplotlib.pyplot as plt
 from astra_torch import lamino_fbp_reconstruction_masked
 
 
-def create_laminography_geometry(num_angles=180, tilt_angle=np.pi/6):
-    """Create laminography acquisition geometry with tilted rotation axis.
-    
-    Args:
-        num_angles: Number of projection angles
-        tilt_angle: Tilt angle of rotation axis from vertical (radians)
-        
-    Returns:
-        vectors: ASTRA laminography vectors (num_angles, 9)
-    """
-    angles = np.linspace(0, np.pi, num_angles, endpoint=False)
-    vectors = []
-    
-    for angle in angles:
-        # Ray direction (parallel beam geometry)
-        ray_dir = np.array([
-            np.cos(angle) * np.cos(tilt_angle),
-            np.sin(angle) * np.cos(tilt_angle),
-            np.sin(tilt_angle)
-        ])
-        
-        # Detector u vector (horizontal in detector plane)
-        u_vec = np.array([-np.sin(angle), np.cos(angle), 0])
-        
-        # Detector v vector (perpendicular to both ray and u)
-        v_vec = np.cross(ray_dir, u_vec)
-        v_vec = v_vec / np.linalg.norm(v_vec)
-        
-        # Combine into ASTRA laminography vector
-        vectors.append(np.concatenate([ray_dir, u_vec, v_vec]))
-    
-    return np.array(vectors)
-
-
 def create_layered_phantom(shape=(64, 64, 64)):
     """Create a layered phantom suitable for laminography.
     
@@ -103,29 +69,25 @@ def create_layered_phantom(shape=(64, 64, 64)):
     return phantom
 
 
-def simulate_laminography_projections(phantom, vectors):
+def simulate_laminography_projections(phantom, num_angles):
     """Simulate laminography projections.
     
     Args:
         phantom: 3D volume
-        vectors: Laminography geometry vectors
+        num_angles: Number of projection angles
         
     Returns:
         projections: Simulated projection data
     """
-    num_angles = vectors.shape[0]
     detector_shape = (256, 256)
     
     # Simple projection simulation
     projections = np.zeros((num_angles,) + detector_shape)
     
-    for i, vector in enumerate(vectors):
-        # Ray direction
-        ray_dir = vector[:3]
-        
+    for i in range(num_angles):
         # Simple line integral approximation
         # In practice, this would use proper ray tracing
-        projection_sum = np.sum(phantom) * abs(ray_dir[2])  # Z-component weight
+        projection_sum = np.sum(phantom)
         
         # Add some angular variation and noise
         angle_factor = 1 + 0.2 * np.sin(2 * np.pi * i / num_angles)
@@ -151,15 +113,17 @@ def main():
     print("=" * 40)
     
     # Check device
+    # Note: For ASTRA compatibility, CPU mode is more stable
+    # CUDA direct linking may cause memory access issues with some ASTRA versions
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
     # Create laminography geometry
     print("Creating laminography geometry...")
-    num_angles = 180
-    tilt_angle = np.pi/6  # 30 degrees
-    vectors = create_laminography_geometry(num_angles, tilt_angle)
-    print(f"Created geometry with {num_angles} angles, tilt = {np.degrees(tilt_angle):.1f}°")
+    num_angles = 360
+    tilt_angle = np.pi/6  # 30 degrees (lamino angle)
+    angles_deg = np.linspace(0, 180, num_angles, endpoint=False)
+    print(f"Created geometry with {num_angles} angles, lamino tilt = {np.degrees(tilt_angle):.1f}°")
     
     # Create layered phantom
     print("Creating layered phantom...")
@@ -168,12 +132,11 @@ def main():
     
     # Simulate projections
     print("Simulating laminography projections...")
-    projections = simulate_laminography_projections(phantom, vectors)
+    projections = simulate_laminography_projections(phantom, num_angles)
     print(f"Projection data shape: {projections.shape}")
     
-    # Convert to PyTorch tensors
-    projections_torch = torch.from_numpy(projections).float()
-    projections_torch = projections_torch.unsqueeze(0).unsqueeze(0)
+    # Convert to PyTorch tensors (V, R, C) format
+    projections_torch = torch.from_numpy(projections).float()  # Shape: (180, 256, 256)
     projections_torch = projections_torch.to(device)
     
     # Perform FBP reconstruction
@@ -181,9 +144,10 @@ def main():
     try:
         volume = lamino_fbp_reconstruction_masked(
             projections_torch,
-            vectors,
+            angles_deg,
+            lamino_angle_deg=np.degrees(tilt_angle),
             voxel_per_mm=2.0,
-            volume_shape=(64, 64, 64)
+            vol_shape=(64, 64, 64),
         )
         print(f"Reconstruction successful! Volume shape: {volume.shape}")
         

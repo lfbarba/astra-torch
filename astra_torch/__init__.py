@@ -27,6 +27,7 @@ from .cbct import (
 # Import laminography functions  
 from .lamino import (
     fbp_reconstruction_masked as lamino_fbp_reconstruction_masked,
+    sirt_reconstruction_masked as lamino_sirt_reconstruction_masked,
     gd_reconstruction_masked as lamino_gd_reconstruction_masked,
     build_lamino_projector, 
     LaminoAcquisition
@@ -50,6 +51,7 @@ __all__ = [
     
     # Laminography functions
     'lamino_fbp_reconstruction_masked',
+    'lamino_sirt_reconstruction_masked',
     'lamino_gd_reconstruction_masked',
     'build_lamino_projector',
     'LaminoAcquisition',

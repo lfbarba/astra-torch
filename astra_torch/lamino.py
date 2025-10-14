@@ -8,6 +8,9 @@ Public functions
 fbp_reconstruction_masked(...):
     Perform FBP (Filtered Back Projection) reconstruction on (possibly masked) subset of views for laminography.
 
+sirt_reconstruction_masked(...):
+    Perform SIRT (Simultaneous Iterative Reconstruction Technique) on (possibly masked) subset of views for laminography.
+
 gd_reconstruction_masked(...):
     Gradient descent reconstruction using differentiable laminography projector.
 
@@ -34,6 +37,13 @@ try:
     import astra  # type: ignore
 except ImportError as e:  # pragma: no cover
     raise ImportError("astra toolbox is required for chip.astra.lamino module") from e
+
+try:
+    import cupy as cp  # type: ignore
+    CUPY_AVAILABLE = True
+except ImportError:
+    CUPY_AVAILABLE = False
+    cp = None
 
 
 @dataclass
@@ -190,6 +200,114 @@ def _create_lamino_geometry(
 
 
 # ---------------------------------------------------------------------------
+# Filtering utilities for FBP
+# ---------------------------------------------------------------------------
+
+def _apply_ramp_filter(
+    sino_rvc,
+    use_gpu: bool = False,
+    filter_type: str = 'ram-lak',
+    det_spacing_mm: float = 1.0,
+):
+    """Apply ramp filter to sinogram for FBP reconstruction.
+    
+    This function applies the ramp filter in the frequency domain to all projections
+    simultaneously for maximum GPU efficiency. The filter can be windowed to reduce
+    noise and artifacts.
+    
+    Parameters
+    ----------
+    sino_rvc : array-like (R, V, C)
+        Sinogram in ASTRA format (rows, views, cols)
+    use_gpu : bool
+        Whether to use GPU (CuPy) or CPU (NumPy)
+    filter_type : str, optional
+        Filter type: 'ram-lak' (default), 'shepp-logan', 'cosine', 'hamming', 'hann'
+        - 'ram-lak': Pure ramp filter (no windowing)
+        - 'shepp-logan': Multiplies ramp by sinc function
+        - 'cosine': Multiplies ramp by cosine
+        - 'hamming': Hamming window on ramp
+        - 'hann': Hann window on ramp
+        
+    Returns
+    -------
+    filtered_sino : array-like (R, V, C)
+        Filtered sinogram
+        
+    Notes
+    -----
+    The ramp filter is the derivative operator in Fourier space, which compensates
+    for the 1/r weighting in backprojection. Windowing reduces high-frequency noise
+    at the cost of slightly reduced resolution.
+    """
+    xp = cp if use_gpu else np
+
+    det_rows, n_views, det_cols = sino_rvc.shape
+
+    if det_spacing_mm <= 0:
+        raise ValueError("det_spacing_mm must be positive for ramp filtering")
+
+    # Pad to next power-of-two (following TomoPy convention) to avoid wrap-around.
+    padded_cols = int(2 ** math.ceil(math.log2(max(64, 2 * det_cols))))
+    pad_cols = padded_cols - det_cols
+
+    # Remove mean along detector columns to suppress low-frequency bias
+    sino_zero_mean = sino_rvc - xp.mean(sino_rvc, axis=2, keepdims=True)
+
+    if pad_cols > 0:
+        pad_config = ((0, 0), (0, 0), (0, pad_cols))
+        sino_padded = xp.pad(sino_zero_mean, pad_config, mode='edge')
+    else:
+        sino_padded = sino_zero_mean
+
+    # Work in Fourier domain along detector axis using rFFT for efficiency.
+    sino_fft = xp.fft.rfft(sino_padded, axis=2)
+
+    freq = xp.fft.rfftfreq(padded_cols, d=det_spacing_mm)
+    freq_abs = xp.abs(freq)
+    freq_abs[0] = 0.0
+
+    freq_max = float(freq_abs.max()) if freq_abs.size > 0 else 1.0
+    if freq_max == 0:
+        freq_max = 1.0
+    freq_norm = freq_abs / freq_max
+
+    window = xp.ones_like(freq_abs)
+    ftype = filter_type.lower()
+
+    if ftype == 'ram-lak':
+        pass
+    elif ftype == 'shepp-logan':
+        window[1:] = xp.sinc(freq_norm[1:])
+    elif ftype == 'cosine':
+        window = xp.cos((xp.pi / 2.0) * freq_norm)
+    elif ftype == 'hamming':
+        window = 0.54 + 0.46 * xp.cos(xp.pi * freq_norm)
+    elif ftype == 'hann':
+        window = 0.5 * (1.0 + xp.cos(xp.pi * freq_norm))
+    else:
+        raise ValueError(
+            f"Unknown filter type: {filter_type}. Choose from: 'ram-lak', 'shepp-logan', 'cosine', 'hamming', 'hann'"
+        )
+
+    ramp = 2.0 * freq_abs
+    filter_kernel = ramp * window
+
+    filter_kernel = filter_kernel.reshape(1, 1, -1)
+    filtered_fft = sino_fft * filter_kernel
+
+    filtered_sino = xp.fft.irfft(filtered_fft, n=padded_cols, axis=2)
+
+    if pad_cols > 0:
+        filtered_sino = filtered_sino[..., :det_cols]
+
+    # Scale by detector sampling step to approximate continuous integral
+    filtered_sino = filtered_sino.astype(xp.float32) * det_spacing_mm
+
+    return filtered_sino
+
+
+# ---------------------------------------------------------------------------
 # Parallel beam reconstruction with optional masking  
 # ---------------------------------------------------------------------------
 
@@ -200,8 +318,10 @@ def fbp_reconstruction_masked(
     mask: Optional[Sequence[Any]] = None,
     tilt_angle_deg: float = 0.0,
     voxel_per_mm: int = 1,
+    voxel_size_mm: float = -1.0,
     vol_shape: Optional[Tuple[int, int, int]] = None,
     det_spacing_mm: Optional[float] = 1.0,
+    filter_type: str = 'hann',
     device: Optional[torch.device] = None,
 ) -> torch.Tensor:
     """Run parallel beam reconstruction (FBP) on a subset of laminography views.
@@ -219,7 +339,16 @@ def fbp_reconstruction_masked(
     tilt_angle_deg : float
         Additional tilt parameter
     voxel_per_mm : int
-        Resolution parameter 
+        Resolution parameter
+    voxel_size_mm : float
+        Voxel size in mm (if -1, computed from voxel_per_mm)
+    vol_shape : optional explicit (nx,ny,nz)
+        Volume dimensions
+    det_spacing_mm : float
+        Detector pixel spacing in mm
+    filter_type : str, optional
+        Ramp filter type: 'ram-lak', 'shepp-logan' (default), 'cosine', 'hamming', 'hann'
+        'shepp-logan' provides good balance between noise and resolution
     vol_shape : optional explicit (nx,ny,nz)
         Volume dimensions
     det_spacing_mm : float
@@ -240,6 +369,9 @@ def fbp_reconstruction_masked(
     """
     if device is None:
         device = projs_vrc.device if isinstance(projs_vrc, torch.Tensor) else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    if voxel_size_mm <= 0:
+        voxel_size_mm = 1.0 / voxel_per_mm
 
     if mask is not None:
         # Support torch.Tensor or numpy / sequence masks (boolean or index)
@@ -268,24 +400,48 @@ def fbp_reconstruction_masked(
         sel_angles = angles_deg
         sel_projs = projs_vrc
 
-    # Convert to ASTRA format (R,V,C) - PyTorch CUDA tensors work directly with ASTRA!
-    # PyTorch CUDA tensors have __cuda_array_interface__, so ASTRA can access GPU memory directly
+    # Convert to ASTRA format (R,V,C)
+    # For GPU path, use CuPy to properly interface PyTorch CUDA tensors with ASTRA
     if sel_projs.is_cuda:
-        # Keep on GPU - ASTRA will access directly via __cuda_array_interface__
-        sino_rvc = sel_projs.permute(1, 0, 2).contiguous().detach()  # (V,R,C) -> (R,V,C)
+        if not CUPY_AVAILABLE:
+            raise RuntimeError(
+                "CuPy is required for GPU-accelerated reconstruction. "
+                "Install it with: pip install cupy-cuda11x (or cupy-cuda12x for CUDA 12)"
+            )
+        # GPU path using CuPy - keeps data on GPU throughout
+        # Get pointer to PyTorch tensor's CUDA memory
+        ptr = sel_projs.data_ptr()
+        shape = sel_projs.shape  # (V, R, C)
+        
+        # Create CuPy array from PyTorch tensor's memory (zero-copy view)
+        sel_projs_cp = cp.ndarray(
+            shape=shape,
+            dtype=cp.float32,
+            memptr=cp.cuda.MemoryPointer(
+                cp.cuda.UnownedMemory(ptr, sel_projs.numel() * 4, sel_projs), 0
+            )
+        )
+        
+        sino_rvc = cp.transpose(sel_projs_cp, (1, 0, 2))
+        sino_rvc = cp.ascontiguousarray(sino_rvc)
+        use_gpu = True
     else:
         # CPU path - convert to numpy
         sel_projs_np = sel_projs.detach().cpu().numpy()  # (V,R,C)
         sino_rvc = np.transpose(sel_projs_np, (1, 0, 2)).copy()
+        use_gpu = False
     
     det_rows, n_views, det_cols = sino_rvc.shape
 
     if vol_shape is None:
         raise ValueError("vol_shape must be specified for FBP reconstruction")
     
-    voxel_size_mm = 1.0 / voxel_per_mm
 
-    vol_rec = np.zeros(vol_shape, dtype=np.float32)
+    # Allocate volume on GPU if using GPU path, otherwise CPU
+    if use_gpu:
+        vol_rec = cp.zeros(vol_shape, dtype=cp.float32)
+    else:
+        vol_rec = np.zeros(vol_shape, dtype=np.float32)
 
     # Create laminography geometry
     vol_geom, proj_geom = _create_lamino_geometry(
@@ -298,21 +454,239 @@ def fbp_reconstruction_masked(
         det_spacing_mm=det_spacing_mm,
     )
 
-    vol_id = astra.data3d.link('-vol', vol_geom, vol_rec)
-    proj_id = astra.data3d.link('-sino', proj_geom, sino_rvc)
+    # Apply ramp filter for FBP (Filtered Backprojection)
+    sino_rvc_filtered = _apply_ramp_filter(
+        sino_rvc,
+        use_gpu=use_gpu,
+        filter_type=filter_type,
+        det_spacing_mm=det_spacing_mm if det_spacing_mm is not None else 1.0,
+    )
 
-    # Use SIRT3D_CUDA for parallel beam reconstruction (laminography)
-    # SIRT (Simultaneous Iterative Reconstruction Technique) works well with parallel beam
-    cfg = astra.astra_dict('SIRT3D_CUDA')
+    vol_id = astra.data3d.link('-vol', vol_geom, vol_rec)
+    proj_id = astra.data3d.link('-sino', proj_geom, sino_rvc_filtered)
+
+    # Use BP3D_CUDA for backprojection after filtering
+    # This completes the FBP (Filtered Backprojection) reconstruction
+    cfg = astra.astra_dict('BP3D_CUDA')
     cfg['ProjectionDataId'] = proj_id
     cfg['ReconstructionDataId'] = vol_id
     alg_id = astra.algorithm.create(cfg)
-    astra.algorithm.run(alg_id, 50)  # Run 50 SIRT iterations
+    astra.algorithm.run(alg_id, 1)  # Single FBP iteration
     astra.algorithm.delete(alg_id)
     astra.data3d.delete(proj_id)
     astra.data3d.delete(vol_id)
 
+    # Normalize by number of projections (matching analytical FBP scaling)
+    norm_factor = math.pi / (2.0 * len(sel_angles)) if len(sel_angles) > 0 else 1.0
+    if use_gpu:
+        vol_rec *= norm_factor
+    else:
+        vol_rec *= norm_factor
+
+    # Convert result back to PyTorch tensor
+    if use_gpu:
+        # GPU path: CuPy -> PyTorch using memory pointer (zero-copy)
+        ptr = vol_rec.data.ptr
+        vol_t = torch.as_tensor(vol_rec, device=device)
+    else:
+        # CPU path: numpy -> PyTorch
+        vol_t = torch.from_numpy(vol_rec).to(torch.float32).to(device)
+    
+    return vol_t
+
+
+def sirt_reconstruction_masked(
+    projs_vrc: torch.Tensor,
+    angles_deg: np.ndarray,
+    lamino_angle_deg: float,
+    mask: Optional[Sequence[Any]] = None,
+    tilt_angle_deg: float = 0.0,
+    voxel_per_mm: int = 1,
+    voxel_size_mm: float = -1.0,
+    vol_shape: Optional[Tuple[int, int, int]] = None,
+    det_spacing_mm: Optional[float] = 1.0,
+    num_iterations: int = 100,
+    min_constraint: Optional[float] = 0.0,
+    max_constraint: Optional[float] = None,
+    device: Optional[torch.device] = None,
+) -> torch.Tensor:
+    """Run SIRT (Simultaneous Iterative Reconstruction Technique) on a subset of laminography views.
+    
+    SIRT is an iterative reconstruction algorithm that minimizes the difference between
+    measured and forward-projected data. It's more robust to noise and artifacts than FBP
+    but requires more computation time.
+    
+    **Note**: SIRT3D_CUDA has different memory management requirements than BP3D_CUDA.
+    For GPU tensors, this function uses CuPy for efficient transposition on the GPU, then
+    transfers to ASTRA's internal GPU buffers. While not fully zero-copy, it minimizes
+    CPU-GPU transfers compared to a pure CPU path.
+
+    Parameters
+    ----------
+    projs_vrc : (V,R,C) tensor 
+        Laminography projections (CPU or CUDA)
+    angles_deg : (V,) numpy array
+        Rotation angles in degrees (0-360)
+    lamino_angle_deg : float
+        Laminography angle (detector/source tilt)
+    mask : optional boolean sequence length V
+        If None, all views are used
+    tilt_angle_deg : float
+        Additional tilt parameter
+    voxel_per_mm : int
+        Resolution parameter
+    voxel_size_mm : float
+        Voxel size in mm (if -1, computed from voxel_per_mm)
+    vol_shape : optional explicit (nx,ny,nz)
+        Volume dimensions
+    det_spacing_mm : float
+        Detector pixel spacing in mm
+    num_iterations : int
+        Number of SIRT iterations (default: 100)
+        More iterations = better quality but slower
+    min_constraint : float, optional
+        Minimum value constraint (default: 0.0 for non-negative reconstruction)
+        Set to None to disable
+    max_constraint : float, optional
+        Maximum value constraint (default: None for no upper limit)
+    device : torch.device, optional
+        Target device
+
+    Returns
+    -------
+    vol : (nx,ny,nz) float32 tensor on device
+    
+    Notes
+    -----
+    SIRT is particularly useful for:
+    - Noisy data
+    - Limited angle tomography
+    - Sparse view reconstruction
+    - When you need non-negativity constraints
+    
+    FBP is typically faster but SIRT can provide better quality for challenging cases.
+    """
+    if device is None:
+        device = projs_vrc.device if isinstance(projs_vrc, torch.Tensor) else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    if voxel_size_mm <= 0:
+        voxel_size_mm = 1.0 / voxel_per_mm
+
+    if mask is not None:
+        # Support torch.Tensor or numpy / sequence masks (boolean or index)
+        if isinstance(mask, torch.Tensor):
+            if mask.dtype == torch.bool:
+                if mask.numel() != len(angles_deg):
+                    raise ValueError("boolean mask length must match number of views")
+                mask_cpu = mask.detach().cpu().numpy()
+                sel_angles = angles_deg[mask_cpu]
+                sel_projs = projs_vrc[mask]
+            else:
+                idx = mask.detach().cpu().numpy()
+                sel_angles = angles_deg[idx]
+                sel_projs = projs_vrc[idx]
+        else:
+            mask_arr = np.asarray(mask)
+            if mask_arr.dtype == bool:
+                if mask_arr.shape[0] != len(angles_deg):
+                    raise ValueError("boolean mask length must match number of views")
+                sel_angles = angles_deg[mask_arr]
+                sel_projs = projs_vrc[mask_arr]
+            else:
+                sel_angles = angles_deg[mask_arr]
+                sel_projs = projs_vrc[mask_arr]
+    else:
+        sel_angles = angles_deg
+        sel_projs = projs_vrc
+
+    # Convert to ASTRA format (R,V,C)
+    # For GPU path, use CuPy to keep data on GPU; for CPU path, use NumPy
+    if sel_projs.is_cuda:
+        if not CUPY_AVAILABLE:
+            raise RuntimeError(
+                "CuPy is required for GPU-accelerated reconstruction. "
+                "Install it with: pip install cupy-cuda11x (or cupy-cuda12x for CUDA 12)"
+            )
+        # GPU path using CuPy - keeps data on GPU throughout
+        # Get pointer to PyTorch tensor's CUDA memory
+        ptr = sel_projs.data_ptr()
+        shape = sel_projs.shape  # (V, R, C)
+        
+        # Create CuPy array from PyTorch tensor's memory (zero-copy view)
+        sel_projs_cp = cp.ndarray(
+            shape=shape,
+            dtype=cp.float32,
+            memptr=cp.cuda.MemoryPointer(
+                cp.cuda.UnownedMemory(ptr, sel_projs.numel() * 4, sel_projs),
+                0
+            )
+        )
+        
+        # Transpose to ASTRA format (R,V,C) and make contiguous
+        sino_rvc = cp.transpose(sel_projs_cp, (1, 0, 2))
+        sino_rvc = cp.ascontiguousarray(sino_rvc)
+    else:
+        # CPU path - convert to numpy
+        sel_projs_np = sel_projs.detach().cpu().numpy()  # (V,R,C)
+        sino_rvc = np.transpose(sel_projs_np, (1, 0, 2)).copy()  # (R,V,C)
+    
+    det_rows, n_views, det_cols = sino_rvc.shape
+
+    if vol_shape is None:
+        raise ValueError("vol_shape must be specified for SIRT reconstruction")
+
+    # Create laminography geometry
+    vol_geom, proj_geom = _create_lamino_geometry(
+        vol_shape=vol_shape,
+        det_shape=(det_rows, det_cols),
+        angles_deg=sel_angles,
+        lamino_angle_deg=lamino_angle_deg,
+        tilt_angle_deg=tilt_angle_deg,
+        voxel_size_mm=voxel_size_mm,
+        det_spacing_mm=det_spacing_mm,
+    )
+
+    # Note: SIRT3D_CUDA requires using astra.data3d.create() instead of link()
+    # due to internal memory management requirements. We convert CuPy/NumPy to 
+    # NumPy for ASTRA to manage, which copies to GPU internally.
+    if isinstance(sino_rvc, cp.ndarray):
+        sino_rvc_np = cp.asnumpy(sino_rvc)
+    else:
+        sino_rvc_np = sino_rvc
+
+    # Create ASTRA data objects (ASTRA manages GPU memory internally)
+    vol_id = astra.data3d.create('-vol', vol_geom)
+    proj_id = astra.data3d.create('-sino', proj_geom, sino_rvc_np)
+
+    # Create SIRT3D_CUDA algorithm
+    cfg = astra.astra_dict('SIRT3D_CUDA')
+    cfg['ProjectionDataId'] = proj_id
+    cfg['ReconstructionDataId'] = vol_id
+    
+    # Add constraints if specified
+    if min_constraint is not None or max_constraint is not None:
+        cfg['option'] = {}
+        if min_constraint is not None:
+            cfg['option']['MinConstraint'] = float(min_constraint)
+        if max_constraint is not None:
+            cfg['option']['MaxConstraint'] = float(max_constraint)
+    
+    alg_id = astra.algorithm.create(cfg)
+    
+    # Run SIRT iterations
+    astra.algorithm.run(alg_id, num_iterations)
+    
+    # Get result from ASTRA
+    vol_rec = astra.data3d.get(vol_id)
+    
+    # Cleanup ASTRA objects
+    astra.algorithm.delete(alg_id)
+    astra.data3d.delete(proj_id)
+    astra.data3d.delete(vol_id)
+
+    # Convert result to PyTorch tensor on target device
     vol_t = torch.from_numpy(vol_rec).to(torch.float32).to(device)
+    
     return vol_t
 
 
