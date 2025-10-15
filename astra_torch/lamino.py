@@ -363,9 +363,15 @@ def fbp_reconstruction_masked(
     device : torch.device, optional
         Target device
 
-    Returns
-    -------
-    vol : (nx,ny,nz) float32 tensor on device
+        Returns
+        -------
+        vol : (nx,ny,nz) float32 tensor on device
+
+        Notes
+        -----
+        * On CUDA, the reconstruction buffer is backed by a torch tensor. CuPy is only
+            used for intermediate arrays and its memory pools are flushed at the end of
+            the routine so repeated reconstructions do not accumulate GPU allocations.
     """
     if device is None:
         device = projs_vrc.device if isinstance(projs_vrc, torch.Tensor) else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -437,9 +443,19 @@ def fbp_reconstruction_masked(
         raise ValueError("vol_shape must be specified for FBP reconstruction")
     
 
-    # Allocate volume on GPU if using GPU path, otherwise CPU
+    # Allocate reconstruction buffer
     if use_gpu:
-        vol_rec = cp.zeros(vol_shape, dtype=cp.float32)
+        # Hold reconstruction directly in a torch tensor so we can return it without
+        # additional copies. ASTRA will write into this memory via a CuPy view.
+        vol_t = torch.zeros(vol_shape, dtype=torch.float32, device=device)
+        vol_rec = cp.ndarray(
+            shape=vol_shape,
+            dtype=cp.float32,
+            memptr=cp.cuda.MemoryPointer(
+                cp.cuda.UnownedMemory(vol_t.data_ptr(), vol_t.numel() * 4, vol_t),
+                0,
+            ),
+        )
     else:
         vol_rec = np.zeros(vol_shape, dtype=np.float32)
 
@@ -479,19 +495,24 @@ def fbp_reconstruction_masked(
     # Normalize by number of projections (matching analytical FBP scaling)
     norm_factor = math.pi / (2.0 * len(sel_angles)) if len(sel_angles) > 0 else 1.0
     if use_gpu:
-        vol_rec *= norm_factor
+        vol_t.mul_(norm_factor)
     else:
         vol_rec *= norm_factor
 
-    # Convert result back to PyTorch tensor
     if use_gpu:
-        # GPU path: CuPy -> PyTorch using memory pointer (zero-copy)
-        ptr = vol_rec.data.ptr
-        vol_t = torch.as_tensor(vol_rec, device=device)
-    else:
-        # CPU path: numpy -> PyTorch
-        vol_t = torch.from_numpy(vol_rec).to(torch.float32).to(device)
-    
+        # Release intermediate CuPy allocations back to the driver; only the returned
+        # torch tensor should retain GPU memory after this function completes.
+        del sino_rvc_filtered
+        del sino_rvc
+        del sel_projs_cp
+        del vol_rec
+        cp.cuda.runtime.deviceSynchronize()
+        cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
+        return vol_t
+
+    # CPU path: convert numpy array back to torch tensor
+    vol_t = torch.from_numpy(vol_rec).to(torch.float32).to(device)
     return vol_t
 
 
