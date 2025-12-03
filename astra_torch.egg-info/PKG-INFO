@@ -184,12 +184,15 @@ reconstructed = lamino_fbp_reconstruction_masked(
 
 ## Requirements
 
-- `torch>=1.9.0`
+- `torch>=1.9.0` (with `__cuda_array_interface__` support for CUDA tensors)
 - `numpy>=1.21.0`
-- `astra-toolbox>=2.0.0`
+- `astra-toolbox>=2.0.0` (compiled with CUDA support)
 - `tqdm>=4.60.0`
 - `h5py>=3.0.0`
 - `scipy>=1.7.0`
+
+**Note:** PyTorch 1.7+ CUDA tensors work directly with ASTRA via `__cuda_array_interface__`, 
+enabling GPU-only operations without CPU memory overhead.
 
 ## Contributing
 

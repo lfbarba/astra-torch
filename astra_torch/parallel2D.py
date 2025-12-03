@@ -628,6 +628,7 @@ def gd_reconstruction_masked(
     angles_deg: np.ndarray,
     mask: Optional[Sequence[Any]] = None,
     voxel_per_mm: int = 1,
+    voxel_size_mm: float = -1.0,
     vol_shape: Optional[Tuple[int, int]] = None,
     det_spacing_mm: float = 1.0,
     device: Optional[torch.device] = None,
@@ -636,6 +637,8 @@ def gd_reconstruction_masked(
     batch_size: int | Sequence[int] = 20,
     lr: float | Sequence[float] = 1e-3,
     clamp_min: float = 0.0,
+    # Loss function
+    loss_type: str = "l2",
     # Optimizer settings
     optimizer_type: str = "adam",
     momentum: float = 0.9,
@@ -676,6 +679,11 @@ def gd_reconstruction_masked(
         Learning rate(s) for optimizer
     clamp_min : float
         Minimum value to clamp volume after each step
+    loss_type : str
+        Type of loss function to use. Options:
+        - "l2": Mean squared error (assumes Gaussian noise)
+        - "poisson": Poisson negative log-likelihood (assumes Poisson noise)
+        Default is "l2"
     optimizer_type : str
         Type of optimizer ("adam" or "sgd")
     momentum : float
@@ -696,6 +704,10 @@ def gd_reconstruction_masked(
     """
     if device is None:
         device = projs_vc.device if isinstance(projs_vc, torch.Tensor) else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # Validate loss_type
+    if loss_type not in ["l2", "poisson"]:
+        raise ValueError(f"loss_type must be 'l2' or 'poisson', got '{loss_type}'")
 
     # Select masked subset of projections & angles
     if mask is not None:
@@ -730,7 +742,9 @@ def gd_reconstruction_masked(
     if vol_shape is None:
         # Default: square volume with size matching detector
         vol_shape = (det_cols, det_cols)
-    voxel_size_mm = 1.0 / voxel_per_mm
+    
+    if voxel_size_mm < 0:
+        voxel_size_mm = 1.0 / voxel_per_mm
 
     # Initialization
     if vol_init is not None:
@@ -821,7 +835,16 @@ def gd_reconstruction_masked(
                 meas_batch = meas_full[:, sel]  # (1, k, C)
                 optimizer.zero_grad(set_to_none=True)
                 pred = proj_layer(recon)  # (1, k, C)
-                loss = torch.mean((pred - meas_batch) ** 2)
+                
+                # Compute loss based on loss_type
+                if loss_type == "l2":
+                    loss = torch.mean((pred - meas_batch) ** 2)
+                elif loss_type == "poisson":
+                    # Poisson negative log-likelihood: pred - meas * log(pred)
+                    # Add small epsilon to avoid log(0)
+                    eps = 1e-8
+                    loss = torch.mean(pred - meas_batch * torch.log(pred + eps))
+                
                 loss.backward()
                 optimizer.step()
                 with torch.no_grad():

@@ -28,6 +28,18 @@ Run with:
 python laminography_example.py
 ```
 
+### parallel2d_example.py
+Demonstrates 2D parallel beam tomographic reconstruction:
+- Creating Shepp-Logan phantom
+- Generating parallel beam projections
+- Comparing FBP, SIRT, and gradient descent methods
+- Quality metrics and visualization
+
+Run with:
+```bash
+python parallel2d_example.py
+```
+
 ## Jupyter Notebooks
 
 ### cbct_tutorial.ipynb
