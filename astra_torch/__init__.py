@@ -1,12 +1,13 @@
 """ASTRA-Torch: GPU-accelerated tomographic reconstruction library.
 
 This library provides PyTorch-compatible implementations of tomographic reconstruction
-algorithms using the ASTRA toolbox, including support for CBCT and laminography.
+algorithms using the ASTRA toolbox, including support for CBCT, laminography, and 2D parallel beam.
 
 Modules:
 --------
 cbct : Cone-beam CT reconstruction functions
 lamino : Laminography reconstruction functions
+parallel2D : 2D parallel beam reconstruction functions
 
 Examples:
 ---------
@@ -33,6 +34,15 @@ from .lamino import (
     LaminoAcquisition
 )
 
+# Import 2D parallel beam functions
+from .parallel2D import (
+    fbp_reconstruction_masked as parallel2d_fbp_reconstruction_masked,
+    sirt_reconstruction_masked as parallel2d_sirt_reconstruction_masked,
+    gd_reconstruction_masked as parallel2d_gd_reconstruction_masked,
+    build_parallel2d_projector,
+    Parallel2DAcquisition
+)
+
 # For backward compatibility, expose some functions without prefixes
 from .cbct import fdk_reconstruction_masked, gd_reconstruction_masked
 
@@ -55,6 +65,13 @@ __all__ = [
     'lamino_gd_reconstruction_masked',
     'build_lamino_projector',
     'LaminoAcquisition',
+    
+    # 2D Parallel beam functions
+    'parallel2d_fbp_reconstruction_masked',
+    'parallel2d_sirt_reconstruction_masked',
+    'parallel2d_gd_reconstruction_masked',
+    'build_parallel2d_projector',
+    'Parallel2DAcquisition',
     
     # Version info
     '__version__',

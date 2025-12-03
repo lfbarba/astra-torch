@@ -16,7 +16,8 @@ contributing
 ## Features
 
 - **CBCT Reconstruction**: FDK and gradient descent algorithms for cone-beam CT
-- **Laminography Reconstruction**: FBP and gradient descent algorithms for parallel-beam laminography  
+- **Laminography Reconstruction**: FBP, SIRT, and gradient descent algorithms for parallel-beam laminography
+- **2D Parallel Beam**: FBP, SIRT, and gradient descent algorithms for 2D parallel beam tomography
 - **PyTorch Integration**: Differentiable operators with autograd support
 - **GPU Acceleration**: CUDA-accelerated reconstruction via ASTRA toolbox
 - **Flexible Data Loading**: Built-in support for Walnut dataset format
