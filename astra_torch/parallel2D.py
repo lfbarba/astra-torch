@@ -867,32 +867,102 @@ class _AstraParallel2DOp:
         """Forward projection: volume -> sinogram."""
         if out_sino_t is None:
             out_sino_t = torch.empty((self.n_views, self.det_cols), device=vol_t.device, dtype=torch.float32)
-        vol_id  = astra.data2d.link('-vol',  self.vol_geom, vol_t.detach())
-        sino_id = astra.data2d.link('-sino', self.proj_geom, out_sino_t.detach())
-        cfg = astra.astra_dict('FP_CUDA')
+        
+        # Convert PyTorch tensors to NumPy for ASTRA
+        # ASTRA will handle GPU memory internally when using CUDA algorithms
+        if vol_t.is_cuda:
+            if not CUPY_AVAILABLE:
+                raise RuntimeError(
+                    "CuPy is required for GPU-accelerated projector. "
+                    "Install it with: pip install cupy-cuda11x (or cupy-cuda12x for CUDA 12)"
+                )
+            # Create CuPy views of PyTorch tensors (zero-copy)
+            vol_cp = cp.ndarray(
+                shape=vol_t.shape,
+                dtype=cp.float32,
+                memptr=cp.cuda.MemoryPointer(
+                    cp.cuda.UnownedMemory(vol_t.data_ptr(), vol_t.numel() * 4, vol_t), 0
+                )
+            )
+            # Convert CuPy to NumPy for ASTRA (ASTRA manages GPU internally)
+            vol_np = cp.asnumpy(vol_cp)
+            
+            # Create ASTRA data objects (ASTRA manages GPU memory)
+            vol_id = astra.data2d.create('-vol', self.vol_geom, vol_np)
+            sino_id = astra.data2d.create('-sino', self.proj_geom)
+        else:
+            # CPU path: convert to numpy
+            vol_np = vol_t.detach().cpu().numpy()
+            vol_id = astra.data2d.create('-vol', self.vol_geom, vol_np)
+            sino_id = astra.data2d.create('-sino', self.proj_geom)
+        
+        cfg = astra.astra_dict('FP_CUDA' if vol_t.is_cuda else 'FP')
         cfg['VolumeDataId'] = vol_id
         cfg['ProjectionDataId'] = sino_id
         alg_id = astra.algorithm.create(cfg)
         astra.algorithm.run(alg_id, 1)
+        
+        # Get result from ASTRA
+        sino_result = astra.data2d.get(sino_id)
+        
         astra.algorithm.delete(alg_id)
         astra.data2d.delete(sino_id)
         astra.data2d.delete(vol_id)
+        
+        # Copy result back to output tensor
+        out_sino_t.copy_(torch.from_numpy(sino_result).to(out_sino_t.device))
+        
         return out_sino_t
 
     def adjoint(self, sino_t, out_vol_t=None):
         """Adjoint/backprojection: sinogram -> volume."""
         if out_vol_t is None:
             out_vol_t = torch.zeros(self.vol_shape, device=sino_t.device, dtype=torch.float32)
-        vol_id  = astra.data2d.link('-vol',  self.vol_geom, out_vol_t.detach())
-        sino_id = astra.data2d.link('-sino', self.proj_geom, sino_t.detach())
-        cfg = astra.astra_dict('BP_CUDA')
+        
+        # Convert PyTorch tensors to NumPy for ASTRA
+        # ASTRA will handle GPU memory internally when using CUDA algorithms
+        if sino_t.is_cuda:
+            if not CUPY_AVAILABLE:
+                raise RuntimeError(
+                    "CuPy is required for GPU-accelerated projector. "
+                    "Install it with: pip install cupy-cuda11x (or cupy-cuda12x for CUDA 12)"
+                )
+            # Create CuPy view of PyTorch tensor (zero-copy)
+            sino_cp = cp.ndarray(
+                shape=sino_t.shape,
+                dtype=cp.float32,
+                memptr=cp.cuda.MemoryPointer(
+                    cp.cuda.UnownedMemory(sino_t.data_ptr(), sino_t.numel() * 4, sino_t), 0
+                )
+            )
+            # Convert CuPy to NumPy for ASTRA (ASTRA manages GPU internally)
+            sino_np = cp.asnumpy(sino_cp)
+            
+            # Create ASTRA data objects (ASTRA manages GPU memory)
+            vol_id = astra.data2d.create('-vol', self.vol_geom)
+            sino_id = astra.data2d.create('-sino', self.proj_geom, sino_np)
+        else:
+            # CPU path: convert to numpy
+            sino_np = sino_t.detach().cpu().numpy()
+            vol_id = astra.data2d.create('-vol', self.vol_geom)
+            sino_id = astra.data2d.create('-sino', self.proj_geom, sino_np)
+        
+        cfg = astra.astra_dict('BP_CUDA' if sino_t.is_cuda else 'BP')
         cfg['ReconstructionDataId'] = vol_id
-        cfg['ProjectionDataId']     = sino_id
+        cfg['ProjectionDataId'] = sino_id
         alg_id = astra.algorithm.create(cfg)
         astra.algorithm.run(alg_id, 1)
+        
+        # Get result from ASTRA
+        vol_result = astra.data2d.get(vol_id)
+        
         astra.algorithm.delete(alg_id)
         astra.data2d.delete(sino_id)
         astra.data2d.delete(vol_id)
+        
+        # Copy result back to output tensor
+        out_vol_t.copy_(torch.from_numpy(vol_result).to(out_vol_t.device))
+        
         return out_vol_t
 
 
