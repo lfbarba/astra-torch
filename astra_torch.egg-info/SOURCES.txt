@@ -14,6 +14,7 @@ astra_torch/LAMINO_README.md
 astra_torch/__init__.py
 astra_torch/cbct.py
 astra_torch/lamino.py
+astra_torch/parallel2D.py
 docs/conf.py
 docs/index.md
 docs/installation.md
@@ -22,7 +23,9 @@ docs/api/index.md
 examples/README.md
 examples/basic_cbct_example.py
 examples/laminography_example.py
+examples/parallel2d_example.py
 tests/__init__.py
 tests/conftest.py
 tests/test_cbct.py
 tests/test_lamino.py
+tests/test_parallel2D.py

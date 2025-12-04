@@ -76,7 +76,8 @@ ASTRA-Torch provides PyTorch-compatible implementations of tomographic reconstru
 ## Features
 
 - **CBCT Reconstruction**: FDK and gradient descent algorithms for cone-beam CT
-- **Laminography Reconstruction**: FBP and gradient descent algorithms for parallel-beam laminography  
+- **Laminography Reconstruction**: FBP, SIRT, and gradient descent algorithms for parallel-beam laminography
+- **2D Parallel Beam**: FBP, SIRT, and gradient descent algorithms for 2D parallel beam tomography
 - **PyTorch Integration**: Differentiable operators with autograd support
 - **GPU Acceleration**: CUDA-accelerated reconstruction via ASTRA toolbox
 - **Flexible Data Loading**: Built-in support for Walnut dataset format
@@ -167,6 +168,42 @@ reconstructed = lamino_fbp_reconstruction_masked(
 )
 ```
 
+### 2D Parallel Beam Reconstruction
+
+```python
+from astra_torch import parallel2d_fbp_reconstruction_masked, build_parallel2d_projector
+import numpy as np
+
+# Generate projections
+angles_deg = np.linspace(0, 180, 180, endpoint=False)
+projector = build_parallel2d_projector(
+    vol_shape=(256, 256),
+    det_cols=384,
+    angles_deg=angles_deg
+)
+
+# Forward projection
+projections = projector(volume_2d)  # volume_2d shape: (1, 1, H, W)
+
+# FBP reconstruction
+reconstructed = parallel2d_fbp_reconstruction_masked(
+    projs_vc=projections[0],  # Shape: (V, C)
+    angles_deg=angles_deg,
+    vol_shape=(256, 256),
+    filter_type='hann'
+)
+
+# SIRT reconstruction (more robust to noise)
+from astra_torch import parallel2d_sirt_reconstruction_masked
+reconstructed_sirt = parallel2d_sirt_reconstruction_masked(
+    projs_vc=projections[0],
+    angles_deg=angles_deg,
+    vol_shape=(256, 256),
+    num_iterations=100,
+    min_constraint=0.0  # Non-negativity
+)
+```
+
 ## Documentation
 
 ### CBCT Functions
@@ -179,8 +216,16 @@ reconstructed = lamino_fbp_reconstruction_masked(
 ### Laminography Functions
 
 - `lamino_fbp_reconstruction_masked()`: FBP reconstruction for laminography
+- `lamino_sirt_reconstruction_masked()`: SIRT reconstruction for laminography
 - `lamino_gd_reconstruction_masked()`: Gradient descent laminography reconstruction
 - `build_lamino_projector()`: Create differentiable laminography projector
+
+### 2D Parallel Beam Functions
+
+- `parallel2d_fbp_reconstruction_masked()`: FBP reconstruction for 2D parallel beam
+- `parallel2d_sirt_reconstruction_masked()`: SIRT reconstruction for 2D parallel beam
+- `parallel2d_gd_reconstruction_masked()`: Gradient descent reconstruction for 2D parallel beam
+- `build_parallel2d_projector()`: Create differentiable 2D parallel beam projector
 
 ## Requirements
 
