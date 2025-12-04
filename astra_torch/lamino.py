@@ -732,7 +732,7 @@ def gd_reconstruction_masked(
     lr: float | Sequence[float] = 1e-3,
     clamp_min: float = 0.0,
     # Loss function
-    loss_type: str = "l2",
+    custom_loss: Optional[Any] = None,
     # Optimizer settings
     optimizer_type: str = "adam",
     momentum: float = 0.9,
@@ -781,11 +781,11 @@ def gd_reconstruction_masked(
         Learning rate(s) for optimizer
     clamp_min : float
         Minimum value to clamp volume after each step
-    loss_type : str
-        Type of loss function to use. Options:
-        - "l2": Mean squared error (assumes Gaussian noise)
-        - "poisson": Poisson negative log-likelihood (assumes Poisson noise)
-        Default is "l2"
+    custom_loss : callable, optional
+        Custom loss function that implements __call__(pred, meas) and returns a scalar loss.
+        If None (default), uses L2 loss (mean squared error).
+        The loss function should accept two tensors (predictions and measurements) and return
+        a scalar tensor that can be used for backpropagation.
     optimizer_type : str
         Type of optimizer ("adam" or "sgd")
     momentum : float
@@ -806,10 +806,6 @@ def gd_reconstruction_masked(
     """
     if device is None:
         device = projs_vrc.device if isinstance(projs_vrc, torch.Tensor) else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    # Validate loss_type
-    if loss_type not in ["l2", "poisson"]:
-        raise ValueError(f"loss_type must be 'l2' or 'poisson', got '{loss_type}'")
 
     # Select masked subset of projections & angles (reuse logic from FDK function)
     if mask is not None:
@@ -872,14 +868,7 @@ def gd_reconstruction_masked(
     # Measurements tensor shaped (1,V,R,C) for convenience
     meas_full = sel_projs.to(device).unsqueeze(0)
 
-    # Build learning rate / epoch schedule
-    if isinstance(batch_size, int):
-        batch_list = [int(batch_size)]
-    else:
-        batch_list = [int(b) for b in batch_size]
-        if len(batch_list) == 0:
-            raise ValueError("batch_size sequence must be non-empty")
-        
+    # Build learning rate / epoch schedule    
     if isinstance(max_epochs, int):
         epochs_list = [int(max_epochs)]
     else:
@@ -894,6 +883,13 @@ def gd_reconstruction_masked(
             raise ValueError("lr sequence must be non-empty")
         if len(lr_list) != len(epochs_list):
             raise ValueError("lr and max_epochs sequences must have same length")
+
+    if isinstance(batch_size, int):
+        batch_list = len(lr_list) * [int(batch_size)]
+    else:
+        batch_list = [int(b) for b in batch_size]
+        if len(batch_list) == 0:
+            raise ValueError("batch_size sequence must be non-empty")
 
     total_epochs = sum(epochs_list)
 
@@ -938,14 +934,12 @@ def gd_reconstruction_masked(
                 optimizer.zero_grad(set_to_none=True)
                 pred = proj_layer(recon)  # (1,k,R,C)
                 
-                # Compute loss based on loss_type
-                if loss_type == "l2":
+                # Compute loss using custom loss function or default L2
+                if custom_loss is not None:
+                    loss = custom_loss(pred, meas_batch)
+                else:
+                    # Default: L2 loss (mean squared error)
                     loss = torch.mean((pred - meas_batch) ** 2)
-                elif loss_type == "poisson":
-                    # Poisson negative log-likelihood: pred - meas * log(pred)
-                    # Add small epsilon to avoid log(0)
-                    eps = 1e-8
-                    loss = torch.mean(pred - meas_batch * torch.log(pred + eps))
                 
                 loss.backward()
                 optimizer.step()
