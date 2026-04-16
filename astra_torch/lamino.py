@@ -733,6 +733,8 @@ def gd_reconstruction_masked(
     clamp_min: float = 0.0,
     # Loss function
     custom_loss: Optional[Any] = None,
+    # Regularization on the volume (added to data-fidelity loss)
+    regularization_fn: Optional[Any] = None,
     # Optimizer settings
     optimizer_type: str = "adam",
     momentum: float = 0.9,
@@ -743,6 +745,8 @@ def gd_reconstruction_masked(
     verbose: bool = False,
     # Restart optimizer
     restart_optimizer: bool = True, # Restart optimizer for each segment
+    num_gd_steps: Optional[int] = None, # If specified, overrides max_epochs and batch_size to run fixed number of GD steps
+    optimizer_state: Optional[dict] = None, # If provided, load optimizer state dict (useful for resuming from checkpoint or staged training
 ) -> torch.Tensor:
     """Gradient-descent laminography reconstruction using differentiable projector.
 
@@ -786,6 +790,11 @@ def gd_reconstruction_masked(
         If None (default), uses L2 loss (mean squared error).
         The loss function should accept two tensors (predictions and measurements) and return
         a scalar tensor that can be used for backpropagation.
+    regularization_fn : callable, optional
+        A function that takes the current reconstruction volume (nz, ny, nx) as input
+        and returns a scalar loss. This is added to the data-fidelity loss at each
+        iteration, enabling arbitrary differentiable regularization (e.g. temporal
+        smoothness, TV, etc.). If None (default), no regularization is applied.
     optimizer_type : str
         Type of optimizer ("adam" or "sgd")
     momentum : float
@@ -798,6 +807,9 @@ def gd_reconstruction_masked(
         Show progress bars
     restart_optimizer : bool
         If True, restart optimizer for each segment (useful for staged learning rates)
+    num_gd_steps : int, optional
+        If specified, overrides max_epochs and batch_size to run a fixed number of GD steps
+
 
     Returns
     -------
@@ -902,6 +914,7 @@ def gd_reconstruction_masked(
         print(lr_list, epochs_list)
     optimizer = None
 
+    gd_steps_done = 0
     for seg_idx, (lr_i, seg_epochs, batch_size) in enumerate(zip(lr_list, epochs_list, batch_list)):
         # Create optimizer
         if optimizer is None or restart_optimizer:
@@ -911,12 +924,17 @@ def gd_reconstruction_masked(
                 optimizer = torch.optim.SGD([recon], lr=lr_i, momentum=momentum, weight_decay=weight_decay)
             else:
                 raise ValueError(f"Unsupported optimizer type: {optimizer_type}. Supported: 'adam', 'sgd'")
+        if optimizer_state is not None:
+            optimizer.load_state_dict(optimizer_state)
+            optimizer_state = None  # Only load state for the first segment if provided
         
         for local_epoch in range(seg_epochs):
             perm = torch.randperm(V_sel, device=device)
             iters = math.ceil(V_sel / batch_size)
             
             epoch_loss = 0.0
+            if gd_steps_done and gd_steps_done >= num_gd_steps:
+                break
             for it in range(iters):
                 sel = perm[it * batch_size:(it + 1) * batch_size]
                 angles_batch = sel_angles[sel.cpu().numpy()]
@@ -941,8 +959,14 @@ def gd_reconstruction_masked(
                     # Default: L2 loss (mean squared error)
                     loss = torch.mean((pred - meas_batch) ** 2)
                 
+                # Add regularization on the volume if provided
+                if regularization_fn is not None:
+                    loss = loss + regularization_fn(recon[0, 0])
+                
                 loss.backward()
                 optimizer.step()
+                
+
                 with torch.no_grad():
                     if clamp_min is not None:
                         recon.clamp_(min=clamp_min)
@@ -957,6 +981,13 @@ def gd_reconstruction_masked(
                         'opt': optimizer_type.upper()
                     }
                     outer_pbar.set_postfix(inner_postfix)  # type: ignore[attr-defined]
+                
+                gd_steps_done += 1
+                if num_gd_steps is not None and gd_steps_done >= num_gd_steps:
+                    # save the optimizer state for potential resumption
+                    optimizer_state = optimizer.state_dict()
+                    break
+
             epoch_global += 1
             if verbose:
                 outer_pbar.update(1)
@@ -965,7 +996,7 @@ def gd_reconstruction_masked(
         outer_pbar.close()
 
     final_vol = recon.detach()[0, 0]
-    return final_vol
+    return final_vol, optimizer_state if num_gd_steps is not None else final_vol
 
 
 # ---------------------------------------------------------------------------
