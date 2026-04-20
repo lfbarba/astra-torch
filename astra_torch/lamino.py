@@ -996,7 +996,7 @@ def gd_reconstruction_masked(
         outer_pbar.close()
 
     final_vol = recon.detach()[0, 0]
-    return final_vol, optimizer_state if num_gd_steps is not None else final_vol
+    return (final_vol, optimizer_state) if num_gd_steps is not None else final_vol
 
 
 # ---------------------------------------------------------------------------
