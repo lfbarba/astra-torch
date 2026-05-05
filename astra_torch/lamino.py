@@ -747,6 +747,7 @@ def gd_reconstruction_masked(
     restart_optimizer: bool = True, # Restart optimizer for each segment
     num_gd_steps: Optional[int] = None, # If specified, overrides max_epochs and batch_size to run fixed number of GD steps
     optimizer_state: Optional[dict] = None, # If provided, load optimizer state dict (useful for resuming from checkpoint or staged training
+    return_optimizer_state: bool = False, # Whether to return final optimizer state dict (useful for checkpointing or staged training
 ) -> torch.Tensor:
     """Gradient-descent laminography reconstruction using differentiable projector.
 
@@ -933,7 +934,7 @@ def gd_reconstruction_masked(
             iters = math.ceil(V_sel / batch_size)
             
             epoch_loss = 0.0
-            if gd_steps_done and gd_steps_done >= num_gd_steps:
+            if gd_steps_done and num_gd_steps is not None and gd_steps_done >= num_gd_steps:
                 break
             for it in range(iters):
                 sel = perm[it * batch_size:(it + 1) * batch_size]
@@ -996,7 +997,7 @@ def gd_reconstruction_masked(
         outer_pbar.close()
 
     final_vol = recon.detach()[0, 0]
-    return (final_vol, optimizer_state) if num_gd_steps is not None else final_vol
+    return (final_vol, optimizer_state) if return_optimizer_state else final_vol
 
 
 # ---------------------------------------------------------------------------
